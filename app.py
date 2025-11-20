@@ -68,9 +68,12 @@ st.markdown(
 # ---------- 유틸 함수 ----------
 @st.cache_data
 def load_keywords(csv_path: str = "keyword.csv") -> pd.DataFrame:
-    """keyword.csv 파일을 불러오는 함수 (카테고리, 키워드)"""
+    """keyword.csv 파일을 불러오는 함수 (카테고리, 키워드, 유사정답)"""
     df = pd.read_csv(csv_path)
     df = df.dropna(subset=["카테고리", "키워드"])
+    # 유사정답 컬럼이 없어도 에러 나지 않도록
+    if "유사정답" not in df.columns:
+        df["유사정답"] = ""
     return df
 
 
@@ -79,11 +82,12 @@ def init_session_state():
     defaults = {
         "page": "start",             # start, game, result
         "category": None,
-        "problems": [],              # 준비된 전체 문제 (문항수 + 2, 중복 없는 키워드)
+        "problems": [],              # 준비된 전체 문제 (문항수 + 2, 중복 없는 키워드 + 유사정답)
         "round_index": 0,            # 현재 problems 인덱스 (패스 포함 진행)
         "user_images": [],           # 실제로 푼 문제에 대한 그림 bytes (최종)
         "ai_answers": [],            # 실제로 푼 문제에 대한 AI 답
         "correct_answers": [],       # 실제로 푼 문제에 대한 정답(키워드)
+        "is_correct_list": [],       # 각 라운드별 정답 여부 (유사정답 포함 기준)
         "start_time": None,
         "last_snapshot_bytes": None, # 현재 문제에 대해 마지막 스냅샷
         "submitting": False,         # True: AI 호출 중(생각중 화면)
@@ -112,10 +116,50 @@ def reset_game():
     init_session_state()
 
 
+def parse_similar_answers(raw: str):
+    """유사정답 문자열을 리스트로 변환 (거북|바다거북 → ['거북','바다거북'])"""
+    if raw is None:
+        return []
+    s = str(raw).strip()
+    if not s or s.lower() == "nan":
+        return []
+    return [part.strip() for part in s.split("|") if part.strip()]
+
+
+def normalize_answer(text: str) -> str:
+    """비교용 정규화: 앞뒤 공백 제거 + 내부 공백 제거"""
+    if text is None:
+        return ""
+    return str(text).strip().replace(" ", "")
+
+
+def check_answer(ai_answer: str, problem: dict) -> bool:
+    """
+    AI 응답이 정답인지 확인
+    - 키워드 또는 유사정답 중 하나라도 일치하면 정답
+    - 유사정답이 없으면 키워드만 비교
+    """
+    if not ai_answer or ai_answer == "통신에 실패했습니다":
+        return False
+
+    ai_norm = normalize_answer(ai_answer)
+    key_norm = normalize_answer(problem.get("keyword", ""))
+
+    if ai_norm and key_norm and ai_norm == key_norm:
+        return True
+
+    similars = problem.get("similar", []) or []
+    for s in similars:
+        if ai_norm == normalize_answer(s):
+            return True
+    return False
+
+
 def prepare_problems(category: str, n_questions: int):
     """
     선택한 카테고리에서 '문항수 + 2' 개의 키워드를 준비
     - 한 게임 동안 같은 키워드는 다시 나오지 않도록 '키워드' 기준으로 중복 제거 후 샘플링
+    - 각 문제에 유사정답 리스트도 함께 저장
     """
     df = load_keywords()
     df_cat = df[df["카테고리"] == category]
@@ -131,13 +175,30 @@ def prepare_problems(category: str, n_questions: int):
         )
         return
 
-    sampled = df_cat_unique.sample(n=total_needed, replace=False, random_state=random.randint(0, 99999))
+    sampled = df_cat_unique.sample(
+        n=total_needed,
+        replace=False,
+        random_state=random.randint(0, 99999),
+    )
 
-    st.session_state.problems = [{"keyword": row["키워드"]} for _, row in sampled.iterrows()]
+    problems = []
+    for _, row in sampled.iterrows():
+        keyword = row["키워드"]
+        similar_raw = row.get("유사정답", "")
+        similar_list = parse_similar_answers(similar_raw)
+        problems.append(
+            {
+                "keyword": keyword,
+                "similar": similar_list,  # 예: ['거북', '바다거북']
+            }
+        )
+
+    st.session_state.problems = problems
     st.session_state.round_index = 0
     st.session_state.user_images = []
     st.session_state.ai_answers = []
     st.session_state.correct_answers = []
+    st.session_state.is_correct_list = []
     st.session_state.start_time = time.time()
     st.session_state.last_snapshot_bytes = None
     st.session_state.submitting = False
@@ -217,6 +278,7 @@ def generate_results_image() -> bytes:
     user_images = st.session_state.user_images
     ai_answers = st.session_state.ai_answers
     correct_answers = st.session_state.correct_answers
+    flags = st.session_state.is_correct_list
     n = len(correct_answers)
 
     if n == 0:
@@ -275,7 +337,7 @@ def generate_results_image() -> bytes:
         ai = ai_answers[i]
         correct = correct_answers[i]
 
-        is_correct = ai == correct
+        is_correct = flags[i] if i < len(flags) else (ai == correct)
         color_ai = (22, 163, 74) if is_correct else (220, 38, 38)
         emoji = "✅" if is_correct else "❌"
 
@@ -401,7 +463,7 @@ def render_game_page():
         st.session_state.last_user_image = st.session_state.last_snapshot_bytes
         st.session_state.last_ai_answer = ai_answer
         st.session_state.last_correct_answer = current_keyword
-        st.session_state.last_is_correct = ai_answer == current_keyword
+        st.session_state.last_is_correct = check_answer(ai_answer, current_problem)
 
         # 다음 단계: 채점 화면
         st.session_state.submitting = False
@@ -471,6 +533,7 @@ def render_game_page():
                 st.session_state.user_images.append(st.session_state.last_user_image)
                 st.session_state.ai_answers.append(ai_ans)
                 st.session_state.correct_answers.append(correct)
+                st.session_state.is_correct_list.append(is_correct)
                 st.session_state.answered_count += 1
 
                 # 다음 문제로 이동
@@ -617,7 +680,7 @@ def render_game_page():
                     st.session_state.last_snapshot_bytes = None
                     st.rerun()
 
-    # ----- 오른쪽: 간단한 현재 상태 요약 -----
+    # ----- 오른쪽: 간단한 현재 진행 상황 -----
     with right:
         st.markdown("#### 현재 진행 상황")
         st.write(f"- 푼 문제 수: **{st.session_state.answered_count}** / {st.session_state.target_questions}")
@@ -629,6 +692,7 @@ def render_result_page():
     st.success("🎉 모든 문제를 다 풀었어요! 결과를 확인해볼까요?")
 
     n_rounds = len(st.session_state.correct_answers)
+    flags = st.session_state.is_correct_list
 
     for i in range(n_rounds):
         st.markdown(f"### 🔎 문제 {i + 1}")
@@ -639,7 +703,6 @@ def render_result_page():
             st.markdown('<div class="result-card">', unsafe_allow_html=True)
             st.markdown("**사용자가 그린 그림**")
             if i < len(st.session_state.user_images) and st.session_state.user_images[i] is not None:
-                # 결과 화면에서도 한 눈에 들어오도록 크기 조정
                 st.image(st.session_state.user_images[i], width=260)
             else:
                 st.write("저장된 그림이 없습니다.")
@@ -654,7 +717,7 @@ def render_result_page():
                 else "정답 없음"
             )
 
-            is_correct = ai_ans == correct
+            is_correct = flags[i] if i < len(flags) else (ai_ans == correct)
             if is_correct:
                 st.markdown(
                     f"<div style='font-size:1.4rem; color:#15803d; margin-bottom:0.5rem;'>"
@@ -693,7 +756,7 @@ def render_result_page():
         data=png_bytes,
         file_name="catchmind_results.png",
         mime="image/png",
-        use_container_width=True,
+        use_column_width=True,
     )
 
     st.markdown("### 다시 해볼까요?")
