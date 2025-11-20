@@ -88,10 +88,7 @@ def image_array_to_png_bytes(image_array):
 
 
 def call_gemini(category: str, image_bytes: bytes) -> str:
-    """
-    Gemini-2.5-flash를 호출해 그림에 대한 한 단어 추론을 수행.
-    - 예외를 숨기지 않고, 모델 응답에서 그대로 1단어만 추출.
-    """
+    """Gemini 호출 + 안정적인 후처리."""
     client = get_client()
 
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
@@ -111,6 +108,7 @@ def call_gemini(category: str, image_bytes: bytes) -> str:
         "문장, 설명, 두 단어 이상(예: '빨간 사과')은 절대 쓰지 마."
     )
 
+    # 모델 호출
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=[user_prompt, img],
@@ -121,18 +119,44 @@ def call_gemini(category: str, image_bytes: bytes) -> str:
         ),
     )
 
-    text = (response.text or "").strip()
+    # ----------------------------------------
+    # 1) RAW 텍스트 확보
+    # ----------------------------------------
+    raw = getattr(response, "text", None)
 
-    # 한 줄만, 한 단어만 남기기
+    if raw is None:
+        return "응답없음"
+
+    text = raw.strip()
+
+    if not text:
+        return "응답없음"
+
+    # ----------------------------------------
+    # 2) 첫 줄만 사용
+    # ----------------------------------------
     if "\n" in text:
         text = text.split("\n")[0].strip()
 
-    # 공백/쉼표/마침표 기준 첫 토큰만 사용
+    # ----------------------------------------
+    # 3) 한 단어 추출 (공백/쉼표/마침표 기준)
+    # ----------------------------------------
     parts = re.split(r"[,\s\.]+", text)
-    token = parts[0].strip() if parts else ""
+    parts = [p.strip() for p in parts if p.strip()]  # 빈 토큰 제거
 
-    # 만약 정말 빈 문자열이면, 그냥 원본 text 반환 (대부분 안 일어날 것)
-    return token or text
+    if not parts:
+        return "응답없음"
+
+    token = parts[0]  # 실제 후보 단어
+
+    # ----------------------------------------
+    # 4) 단어가 너무 이상하면 fallback
+    # ----------------------------------------
+    if not token or len(token) == 0:
+        return "응답없음"
+
+    # 정상적인 단어 최종 반환
+    return token
 
 
 def reset_game():
