@@ -23,7 +23,6 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* 전체 폰트 조금 키우기 (태블릿 고려) */
     html, body, [class*="css"]  {
         font-size: 18px;
     }
@@ -45,15 +44,21 @@ TIME_LIMIT_SECONDS = 60
 # ---------------- 유틸 함수 ---------------- #
 @st.cache_data
 def load_keywords():
+    """keyword.csv 읽어서 DataFrame으로 리턴"""
     try:
+        # 🔧 파일 이름을 keyword.csv (소문자)로 고정
         df = pd.read_csv("keyword.csv")
     except FileNotFoundError:
         st.error("⚠️ `keyword.csv` 파일을 찾을 수 없습니다. 같은 폴더에 파일을 넣어주세요.")
         st.stop()
 
+    # 헤더 앞뒤 공백 제거 (카테고리, 키워드 / 카테고리, 키워드 등 오타 대비)
+    df.columns = df.columns.str.strip()
+
     expected_cols = {"카테고리", "키워드"}
     if not expected_cols.issubset(set(df.columns)):
         st.error("⚠️ `keyword.csv` 파일의 컬럼은 반드시 `카테고리`, `키워드` 여야 합니다.")
+        st.write("현재 CSV의 컬럼:", list(df.columns))  # 디버깅용
         st.stop()
 
     return df
@@ -65,8 +70,8 @@ def get_client():
     if not api_key:
         st.error(
             "⚠️ `GEMINI_API_KEY`가 설정되어 있지 않습니다.\n\n"
-            "`.streamlit/secrets.toml` 파일에 다음처럼 설정해주세요.\n\n"
-            "[[secrets]]\nGEMINI_API_KEY = \"YOUR_API_KEY\""
+            "Streamlit의 Secrets 설정에서 다음처럼 등록해주세요.\n\n"
+            'GEMINI_API_KEY = "YOUR_API_KEY"'
         )
         st.stop()
     return genai.Client(api_key=api_key)
@@ -120,10 +125,7 @@ def call_gemini(category: str, image_bytes: bytes) -> str:
     if "\n" in text:
         text = text.split("\n")[0].strip()
 
-    # 공백/쉼표 기준 첫 토큰만
     token = re.split(r"[,\s]+", text)[0].strip()
-
-    # 혹시 비어 있으면 원문 반환
     return token or text or "모름"
 
 
@@ -147,7 +149,7 @@ def start_game(selected_category: str):
     cat_df = df[df["카테고리"] == selected_category]
 
     if cat_df.empty:
-        st.error(f"⚠️ `{selected_category}` 카테고리의 키워드가 없습니다. Keyword.csv를 확인해주세요.")
+        st.error(f"⚠️ `{selected_category}` 카테고리의 키워드가 없습니다. keyword.csv를 확인해주세요.")
         st.stop()
 
     # 5개를 뽑되, 키워드가 부족하면 중복 허용
@@ -228,6 +230,9 @@ def draw_game_page():
     with col_canvas:
         st.markdown("#### 1️⃣ 그림판에 제시어를 그려보세요")
 
+        # 🔧 시간 초과 시 drawing_mode를 None으로 바꿔서 입력 막기
+        current_drawing_mode = None if drawing_disabled else "freedraw"
+
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 0, 0)",
             stroke_width=8,
@@ -235,9 +240,9 @@ def draw_game_page():
             background_color="#FFFFFF",
             height=400,
             width=400,
-            drawing_mode="freedraw",
+            drawing_mode=current_drawing_mode,
+            update_streamlit=True,
             key=f"canvas_round_{round_idx}",
-            disabled=drawing_disabled,
         )
 
         # 현재 그림을 스냅샷으로 저장
@@ -260,8 +265,6 @@ def draw_game_page():
 
         if drawing_disabled:
             st.info("⏰ 시간이 끝났어요! **제출하기** 버튼을 눌러 AI에게 정답을 물어보세요.")
-
-        st.markdown("")
 
         submit = st.button("제출하기 (AI에게 맞춰보기) 🚀", use_container_width=True)
 
@@ -312,7 +315,6 @@ def draw_result_page():
             reset_game()
         return
 
-    # 간단하게 정답/오답 카운트
     correct_count = sum(1 for r in results if r["ai_answer"] == r["keyword"])
     st.subheader(f"총 {TOTAL_ROUNDS}문제 중 {correct_count}개 정답 (단순 일치 기준)")
 
