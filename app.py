@@ -310,7 +310,7 @@ page = st.session_state.page
 
 # ---------- 시작 화면 ----------
 def render_start_page():
-    st.markdown("### 1단계 · 카테고리를 선택하세요")
+    st.markdown("### 1단계 · 카테고리를 고르세요")
     categories = ["동물", "과일", "채소", "사물", "교통수단"]
 
     cols = st.columns(5)
@@ -326,24 +326,19 @@ def render_start_page():
     st.markdown("### 2단계 · 문항 수를 정하세요")
 
     st.session_state.target_questions = st.slider(
-        "문항 수를 선택하세요",
+        "문항 수",
         min_value=3,
         max_value=10,
         value=st.session_state.target_questions,
         step=1,
     )
-    st.caption("패스 기능 때문에 실제 준비되는 문제 수는 '문항 수 + 2' 입니다.")
+    st.caption("패스를 고려해 실제로는 ‘문항 수 + 2’개의 문제가 준비됩니다.")
 
-    st.markdown("---")
-    st.markdown("### 3단계 · 게임 안내")
-
-    st.write("- 선택한 카테고리의 제시어가 **랜덤으로 1개씩** 나옵니다.")
-    st.write("- 각 문제당 **제한 시간은 60초**입니다.")
-    st.write("- 그림을 다 그린 뒤 **‘제출’**을 누르면 AI가 한 단어로 정답을 맞춰요.")
-    st.write("- 문제가 너무 어려우면 **‘패스’**를 눌러 다음 문제로 넘어갈 수 있어요.")
-    st.write("  - 패스는 한 게임에 최대 **2번**까지 사용할 수 있습니다.")
-    st.write("  - 패스한 문제는 문항 수에 포함되지 않습니다.")
-    st.write("- 네트워크 문제로 AI 통신이 실패하면, `통신에 실패했습니다` 라는 문구가 표시됩니다.")
+    # 게임 안내는 최소화: 보고 싶은 학생만 펼쳐서 보도록
+    with st.expander("게임 방법이 궁금하면 눌러보세요"):
+        st.write("- 제한 시간: 각 문제당 **60초**")
+        st.write("- 그림을 그리고 **제출**을 누르면 AI가 한 단어로 답해요.")
+        st.write("- **패스**는 한 게임에 최대 2번, 패스한 문제는 점수에 들어가지 않아요.")
 
     st.markdown("---")
     if st.button("🚀 게임 시작하기", type="primary", use_container_width=True):
@@ -386,7 +381,6 @@ def render_game_page():
             f'<div class="keyword-box">제시어: <span style="color:#e65100;">{current_keyword}</span></div>',
             unsafe_allow_html=True,
         )
-        st.caption(f"카테고리: {category}")
 
         col1, col2 = st.columns([2, 1])
         with col1:
@@ -425,7 +419,6 @@ def render_game_page():
             f'<div class="keyword-box">제시어: <span style="color:#e65100;">{st.session_state.last_correct_answer}</span></div>',
             unsafe_allow_html=True,
         )
-        st.caption(f"카테고리: {category}")
 
         col1, col2 = st.columns([2, 3])
         with col1:
@@ -442,24 +435,32 @@ def render_game_page():
             correct = st.session_state.last_correct_answer or "정답 없음"
             is_correct = st.session_state.last_is_correct
 
+            # ✅ / ❌ 한 줄로 눈에 확 들어오게
             if is_correct:
                 st.markdown(
-                    f"<div style='font-size:1.5rem; color:#15803d; margin-bottom:0.5rem;'>"
-                    f"🎉 정답! AI 응답: <b>{ai_ans}</b>"
-                    f"</div>",
+                    "<div style='font-size:1.6rem; font-weight:700; color:#16a34a; margin-bottom:0.5rem;'>"
+                    "✅ 정답!"
+                    "</div>",
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
-                    f"<div style='font-size:1.5rem; color:#dc2626; margin-bottom:0.5rem;'>"
-                    f"😅 아쉬워요! AI 응답: <b>{ai_ans}</b>"
-                    f"</div>",
+                    "<div style='font-size:1.6rem; font-weight:700; color:#dc2626; margin-bottom:0.5rem;'>"
+                    "❌ 오답!"
+                    "</div>",
                     unsafe_allow_html=True,
                 )
 
+            # AI 답 / 정답은 짧고 선명하게
             st.markdown(
-                f"<div style='font-size:1.4rem; color:#1d4ed8;'>"
-                f"🎯 정답: <b>{correct}</b>"
+                f"<div style='font-size:1.3rem; margin-bottom:0.2rem;'>"
+                f"🤖 <b>AI 답:</b> <span style='color:#b91c1c;'>{ai_ans}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"<div style='font-size:1.3rem;'>"
+                f"🎯 <b>정답:</b> <span style='color:#1d4ed8;'>{correct}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -514,7 +515,6 @@ def render_game_page():
             f'<div class="keyword-box">제시어: <span style="color:#e65100;">{current_keyword}</span></div>',
             unsafe_allow_html=True,
         )
-        st.caption(f"카테고리: {category}")
 
     with top2:
         st.markdown("#### 남은 시간")
