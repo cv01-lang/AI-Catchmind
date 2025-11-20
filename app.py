@@ -46,19 +46,19 @@ TIME_LIMIT_SECONDS = 60
 def load_keywords():
     """keyword.csv 읽어서 DataFrame으로 리턴"""
     try:
-        # 🔧 파일 이름을 keyword.csv (소문자)로 고정
+        # 파일 이름은 전부 소문자 기준
         df = pd.read_csv("keyword.csv")
     except FileNotFoundError:
         st.error("⚠️ `keyword.csv` 파일을 찾을 수 없습니다. 같은 폴더에 파일을 넣어주세요.")
         st.stop()
 
-    # 헤더 앞뒤 공백 제거 (카테고리, 키워드 / 카테고리, 키워드 등 오타 대비)
+    # 헤더 앞뒤 공백 제거
     df.columns = df.columns.str.strip()
 
     expected_cols = {"카테고리", "키워드"}
     if not expected_cols.issubset(set(df.columns)):
         st.error("⚠️ `keyword.csv` 파일의 컬럼은 반드시 `카테고리`, `키워드` 여야 합니다.")
-        st.write("현재 CSV의 컬럼:", list(df.columns))  # 디버깅용
+        st.write("현재 CSV의 컬럼:", list(df.columns))
         st.stop()
 
     return df
@@ -70,7 +70,7 @@ def get_client():
     if not api_key:
         st.error(
             "⚠️ `GEMINI_API_KEY`가 설정되어 있지 않습니다.\n\n"
-            "Streamlit의 Secrets 설정에서 다음처럼 등록해주세요.\n\n"
+            "Streamlit Secrets에 아래처럼 등록해주세요.\n\n"
             'GEMINI_API_KEY = "YOUR_API_KEY"'
         )
         st.stop()
@@ -89,7 +89,10 @@ def image_array_to_png_bytes(image_array):
 
 
 def call_gemini(category: str, image_bytes: bytes) -> str:
-    """Gemini-2.5-flash를 호출해 그림에 대한 한 단어 추론을 수행."""
+    """
+    Gemini-2.5-flash를 호출해 그림에 대한 한 단어 추론을 수행.
+    - 예외를 일부러 삼키지 않고, 모델 응답에서 그대로 1단어만 추출.
+    """
     client = get_client()
 
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
@@ -109,6 +112,8 @@ def call_gemini(category: str, image_bytes: bytes) -> str:
         "문장, 설명, 두 단어 이상(예: '빨간 사과')은 절대 쓰지 마."
     )
 
+    # 여기서 예외가 나면 Streamlit이 그대로 알려주므로,
+    # 우리가 '모름' 같은 값을 임의로 넣지 않습니다.
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=[user_prompt, img],
@@ -121,12 +126,16 @@ def call_gemini(category: str, image_bytes: bytes) -> str:
 
     text = (response.text or "").strip()
 
-    # 후처리: 첫 줄, 첫 토큰만 남겨 강제로 '한 단어'로 맞추기
+    # 한 줄만, 한 단어만 남기기
     if "\n" in text:
         text = text.split("\n")[0].strip()
 
-    token = re.split(r"[,\s]+", text)[0].strip()
-    return token or text or "모름"
+    # 공백/쉼표/마침표 기준 첫 토큰만 사용
+    parts = re.split(r"[,\s\.]+", text)
+    token = parts[0].strip() if parts else ""
+
+    # 만약 정말 빈 문자열이면, 그냥 원본 text 반환 (대부분 안 일어날 것)
+    return token or text
 
 
 def reset_game():
@@ -230,7 +239,7 @@ def draw_game_page():
     with col_canvas:
         st.markdown("#### 1️⃣ 그림판에 제시어를 그려보세요")
 
-        # 🔧 시간 초과 시 drawing_mode를 None으로 바꿔서 입력 막기
+        # 시간 초과 시 drawing_mode를 None으로 바꿔 입력 막기
         current_drawing_mode = None if drawing_disabled else "freedraw"
 
         canvas_result = st_canvas(
