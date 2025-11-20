@@ -1,5 +1,6 @@
 streamlit
 streamlit-drawable-canvas
 pandas
+numpy
 Pillow
-google-genai
+google-generativeai
