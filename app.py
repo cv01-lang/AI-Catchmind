@@ -46,8 +46,7 @@ TIME_LIMIT_SECONDS = 60
 def load_keywords():
     """keyword.csv 읽어서 DataFrame으로 리턴"""
     try:
-        # 파일 이름은 전부 소문자 기준
-        df = pd.read_csv("keyword.csv")
+        df = pd.read_csv("keyword.csv")  # 파일 이름은 소문자 기준
     except FileNotFoundError:
         st.error("⚠️ `keyword.csv` 파일을 찾을 수 없습니다. 같은 폴더에 파일을 넣어주세요.")
         st.stop()
@@ -91,7 +90,7 @@ def image_array_to_png_bytes(image_array):
 def call_gemini(category: str, image_bytes: bytes) -> str:
     """
     Gemini-2.5-flash를 호출해 그림에 대한 한 단어 추론을 수행.
-    - 예외를 일부러 삼키지 않고, 모델 응답에서 그대로 1단어만 추출.
+    - 예외를 숨기지 않고, 모델 응답에서 그대로 1단어만 추출.
     """
     client = get_client()
 
@@ -112,8 +111,6 @@ def call_gemini(category: str, image_bytes: bytes) -> str:
         "문장, 설명, 두 단어 이상(예: '빨간 사과')은 절대 쓰지 마."
     )
 
-    # 여기서 예외가 나면 Streamlit이 그대로 알려주므로,
-    # 우리가 '모름' 같은 값을 임의로 넣지 않습니다.
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=[user_prompt, img],
@@ -147,6 +144,8 @@ def reset_game():
         "results",
         "round_start_time",
         "current_snapshot",
+        "round_evaluated",
+        "current_round_result",
     ]:
         if key in st.session_state:
             del st.session_state[key]
@@ -173,6 +172,8 @@ def start_game(selected_category: str):
     st.session_state.results = []
     st.session_state.round_start_time = time.time()
     st.session_state.current_snapshot = None
+    st.session_state.round_evaluated = False
+    st.session_state.current_round_result = None
     st.session_state.page = "game"
 
 
@@ -212,11 +213,15 @@ def draw_game_page():
     round_idx = st.session_state.round_index
     keyword = st.session_state.keywords[round_idx]
     category = st.session_state.selected_category
+    round_evaluated = st.session_state.get("round_evaluated", False)
 
     # 남은 시간 계산
     elapsed = time.time() - st.session_state.round_start_time
     remaining = max(0, TIME_LIMIT_SECONDS - int(elapsed))
-    drawing_disabled = remaining <= 0
+
+    # 이미 제출했거나 시간이 끝나면 그림판 잠금
+    time_over = remaining <= 0
+    drawing_disabled = time_over or round_evaluated
 
     st.header("🖌️ 그림 그리기 (게임 화면)")
     col_title, col_timer = st.columns([3, 1])
@@ -228,18 +233,19 @@ def draw_game_page():
 
     with col_timer:
         st.metric("남은 시간(초)", remaining)
-        if drawing_disabled:
+        if time_over and not round_evaluated:
             st.error("⏰ 시간 종료! 이제 그림을 더 그릴 수 없어요.")
+        if round_evaluated:
+            st.info("✅ 이미 제출이 완료되었습니다.\n아래에서 결과를 확인하고 다음으로 넘어가세요.")
 
     st.markdown("---")
 
-    # 좌측: 캔버스 / 우측: 스냅샷 & 안내
+    # 좌측: 캔버스 / 우측: 스냅샷 & 안내 + 결과
     col_canvas, col_side = st.columns([2, 1])
 
     with col_canvas:
         st.markdown("#### 1️⃣ 그림판에 제시어를 그려보세요")
 
-        # 시간 초과 시 drawing_mode를 None으로 바꿔 입력 막기
         current_drawing_mode = None if drawing_disabled else "freedraw"
 
         canvas_result = st_canvas(
@@ -255,7 +261,7 @@ def draw_game_page():
         )
 
         # 현재 그림을 스냅샷으로 저장
-        if canvas_result.image_data is not None:
+        if canvas_result.image_data is not None and not round_evaluated:
             png_bytes = image_array_to_png_bytes(canvas_result.image_data)
             if png_bytes:
                 st.session_state.current_snapshot = png_bytes
@@ -272,12 +278,17 @@ def draw_game_page():
         else:
             st.info("아직 스냅샷이 없습니다. 그림을 그리면 여기에서 미리보기를 볼 수 있어요.")
 
-        if drawing_disabled:
-            st.info("⏰ 시간이 끝났어요! **제출하기** 버튼을 눌러 AI에게 정답을 물어보세요.")
+        if time_over and not round_evaluated:
+            st.info("⏰ 시간이 끝났어요! 지금까지 그린 그림으로 AI에게 정답을 물어볼 수 있어요.")
 
-        submit = st.button("제출하기 (AI에게 맞춰보기) 🚀", use_container_width=True)
+        # 제출 버튼: 라운드 평가 전일 때만 활성화
+        submit = st.button(
+            "제출하기 (AI에게 맞춰보기) 🚀",
+            use_container_width=True,
+            disabled=round_evaluated,
+        )
 
-        if submit:
+        if submit and not round_evaluated:
             if not st.session_state.get("current_snapshot"):
                 st.warning("먼저 그림을 그려주세요!")
                 st.stop()
@@ -292,25 +303,51 @@ def draw_game_page():
                 )
                 ai_answer = call_gemini(category, snapshot_bytes)
 
-            # 라운드 결과 저장
-            st.session_state.results.append(
-                {
-                    "round": round_idx + 1,
-                    "keyword": keyword,
-                    "ai_answer": ai_answer,
-                    "image": snapshot_bytes,
-                }
-            )
-
-            # 다음 라운드로
-            st.session_state.round_index += 1
-            if st.session_state.round_index >= TOTAL_ROUNDS:
-                st.session_state.page = "result"
-            else:
-                st.session_state.round_start_time = time.time()
-                st.session_state.current_snapshot = None
+            # 라운드 결과 저장 (전체 결과 + 현재 라운드용)
+            result = {
+                "round": round_idx + 1,
+                "keyword": keyword,
+                "ai_answer": ai_answer,
+                "image": snapshot_bytes,
+            }
+            st.session_state.results.append(result)
+            st.session_state.current_round_result = result
+            st.session_state.round_evaluated = True
 
             st.rerun()
+
+        # 3️⃣ 이번 라운드 결과 표시
+        if round_evaluated and st.session_state.get("current_round_result"):
+            r = st.session_state.current_round_result
+
+            st.markdown("---")
+            st.markdown("#### 3️⃣ 이번 라운드 결과")
+
+            st.markdown(f"**제시어(정답)**: `{r['keyword']}`")
+            st.markdown(f"**AI의 답변**: `{r['ai_answer']}`")
+            if r["ai_answer"] == r["keyword"]:
+                st.success("✅ 정답입니다!")
+            else:
+                st.warning("❌ 다른 답을 했어요.")
+
+            st.markdown("")
+
+            # 다음 라운드 / 최종 결과 버튼
+            if round_idx + 1 >= TOTAL_ROUNDS:
+                next_label = "최종 결과 보기 ▶"
+            else:
+                next_label = "다음 라운드로 ▶"
+
+            if st.button(next_label, use_container_width=True):
+                if round_idx + 1 >= TOTAL_ROUNDS:
+                    st.session_state.page = "result"
+                else:
+                    st.session_state.round_index += 1
+                    st.session_state.round_start_time = time.time()
+                    st.session_state.current_snapshot = None
+                    st.session_state.round_evaluated = False
+                    st.session_state.current_round_result = None
+                st.rerun()
 
 
 def draw_result_page():
