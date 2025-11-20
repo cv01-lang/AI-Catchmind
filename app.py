@@ -48,12 +48,12 @@ def load_keywords():
     try:
         df = pd.read_csv("keyword.csv")
     except FileNotFoundError:
-        st.error("⚠️ `Keyword.csv` 파일을 찾을 수 없습니다. 같은 폴더에 파일을 넣어주세요.")
+        st.error("⚠️ `keyword.csv` 파일을 찾을 수 없습니다. 같은 폴더에 파일을 넣어주세요.")
         st.stop()
 
     expected_cols = {"카테고리", "키워드"}
     if not expected_cols.issubset(set(df.columns)):
-        st.error("⚠️ `Keyword.csv` 파일의 컬럼은 반드시 `카테고리`, `키워드` 여야 합니다.")
+        st.error("⚠️ `keyword.csv` 파일의 컬럼은 반드시 `카테고리`, `키워드` 여야 합니다.")
         st.stop()
 
     return df
