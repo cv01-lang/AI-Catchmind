@@ -198,7 +198,7 @@ def draw_game_page():
     # 모든 라운드를 다 풀었으면 결과 페이지로 이동
     if st.session_state.round_index >= TOTAL_ROUNDS:
         st.session_state.page = "result"
-        st.experimental_rerun()
+        st.rerun()
 
     round_idx = st.session_state.round_index
     keyword = st.session_state.keywords[round_idx]
@@ -301,7 +301,7 @@ def draw_game_page():
                 st.session_state.round_start_time = time.time()
                 st.session_state.current_snapshot = None
 
-            st.experimental_rerun()
+            st.rerun()
 
 
 def draw_result_page():
