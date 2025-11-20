@@ -91,7 +91,6 @@ def init_session_state():
         "max_passes": 2,             # 패스 최대 횟수
         "passes_used": 0,            # 이미 사용한 패스 수
         "answered_count": 0,         # 실제로 푼(제출한) 문제 수
-        "selected_color": "#000000", # 현재 선택된 팔레트 색상
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -105,7 +104,7 @@ def reset_game():
         "user_images", "ai_answers", "correct_answers",
         "start_time", "last_snapshot_bytes", "submitting",
         "target_questions", "max_passes", "passes_used",
-        "answered_count", "selected_color",
+        "answered_count",
     ]
     for k in keys:
         if k in st.session_state:
@@ -450,39 +449,21 @@ def render_game_page():
     with left:
         st.markdown("#### 1) 팔레트 & 그림 그리기")
 
-        # === 큰 가로 팔레트 버튼들 ===
-        palette_cols = st.columns(4)
-        colors = [
-            ("#000000", "검정"),
-            ("#ef4444", "빨강"),
-            ("#3b82f6", "파랑"),
-            ("#22c55e", "초록"),
-        ]
+        # 원래 방식의 색상 팔레트 (radio)
+        color_label = st.radio(
+            "자주 쓰는 색상",
+            options=["⚫ 검정", "🔴 빨강", "🔵 파랑", "🟢 초록"],
+            horizontal=True,
+        )
 
-        for i, (hex_color, name) in enumerate(colors):
-            with palette_cols[i]:
-                # 버튼 (클릭 영역)
-                if st.button(name, key=f"palette_btn_{i}", use_container_width=True):
-                    st.session_state.selected_color = hex_color
-
-                # 큰 컬러 박스 (시각적 표시)
-                is_selected = st.session_state.selected_color == hex_color
-                border_color = "#fbbf24" if is_selected else "#e5e7eb"
-                st.markdown(
-                    f"""
-                    <div style="
-                        width: 100%;
-                        height: 70px;
-                        margin-top: 4px;
-                        background-color: {hex_color};
-                        border-radius: 12px;
-                        border: 4px solid {border_color};
-                    "></div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-        stroke_color = st.session_state.selected_color
+        if "검정" in color_label:
+            stroke_color = "#000000"
+        elif "빨강" in color_label:
+            stroke_color = "#ef4444"
+        elif "파랑" in color_label:
+            stroke_color = "#3b82f6"
+        else:
+            stroke_color = "#22c55e"
 
         if not time_over:
             canvas_result = st_canvas(
@@ -490,8 +471,8 @@ def render_game_page():
                 stroke_width=8,
                 stroke_color=stroke_color,
                 background_color="#FFFFFF",
-                width=420,   # 태블릿에서 한눈에 보기 좋은 크기
-                height=420,
+                width=600,   # 🔥 여기서 캔버스를 가로로 넓힘
+                height=450,
                 drawing_mode="freedraw",
                 key=f"canvas_{round_idx}",
             )
@@ -528,8 +509,8 @@ def render_game_page():
         with bcol1:
             if st.button("✅ 제출", use_container_width=True, disabled=submit_disabled):
                 if st.session_state.last_snapshot_bytes is None:
-                    # 완전히 빈 그림인 경우 흰 이미지 생성
-                    blank = Image.new("RGB", (420, 420), "white")
+                    # 완전히 빈 그림인 경우 흰 이미지 생성 (캔버스와 동일 크기)
+                    blank = Image.new("RGB", (600, 450), "white")
                     buf = io.BytesIO()
                     blank.save(buf, format="PNG")
                     st.session_state.last_snapshot_bytes = buf.getvalue()
