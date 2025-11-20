@@ -46,7 +46,7 @@ TIME_LIMIT_SECONDS = 60
 @st.cache_data
 def load_keywords():
     try:
-        df = pd.read_csv("Keyword.csv")
+        df = pd.read_csv("keyword.csv")
     except FileNotFoundError:
         st.error("⚠️ `Keyword.csv` 파일을 찾을 수 없습니다. 같은 폴더에 파일을 넣어주세요.")
         st.stop()
