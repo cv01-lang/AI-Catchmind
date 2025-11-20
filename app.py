@@ -79,14 +79,14 @@ def init_session_state():
     defaults = {
         "page": "start",             # start, game, result
         "category": None,
-        "problems": [],              # 준비된 전체 문제 (문항수 + 2)
+        "problems": [],              # 준비된 전체 문제 (문항수 + 2, 중복 없는 키워드)
         "round_index": 0,            # 현재 problems 인덱스 (패스 포함 진행)
         "user_images": [],           # 실제로 푼 문제에 대한 그림 bytes
         "ai_answers": [],            # 실제로 푼 문제에 대한 AI 답
         "correct_answers": [],       # 실제로 푼 문제에 대한 정답(키워드)
         "start_time": None,
         "last_snapshot_bytes": None,
-        "submitting": False,
+        "submitting": False,         # True: AI 채점 단계
         "target_questions": 5,       # 사용자가 설정한 문항 수
         "max_passes": 2,             # 패스 최대 횟수
         "passes_used": 0,            # 이미 사용한 패스 수
@@ -113,17 +113,26 @@ def reset_game():
 
 
 def prepare_problems(category: str, n_questions: int):
-    """선택한 카테고리에서 '문항수 + 2' 개의 키워드를 준비"""
+    """
+    선택한 카테고리에서 '문항수 + 2' 개의 키워드를 준비
+    - 한 게임 동안 같은 키워드는 다시 나오지 않도록 '키워드' 기준으로 중복 제거 후 샘플링
+    - 예: 고양이-거북이(패스)-고양이(패스)-고양이 같은 문제 방지
+    """
     df = load_keywords()
     df_cat = df[df["카테고리"] == category]
 
-    if df_cat.empty:
-        st.error(f"'{category}' 카테고리에 해당하는 키워드가 keyword.csv에 없습니다.")
-        return
+    # 같은 키워드는 한 번만 사용하기 위해 키워드 기준으로 중복 제거
+    df_cat_unique = df_cat.drop_duplicates(subset=["키워드"])
 
     total_needed = n_questions + 2  # 패스 2회 대비
-    replace = len(df_cat) < total_needed
-    sampled = df_cat.sample(n=total_needed, replace=replace)
+    if len(df_cat_unique) < total_needed:
+        st.error(
+            f"'{category}' 카테고리에는 최소 {total_needed}개의 서로 다른 키워드가 필요합니다.\n"
+            f"현재 keyword.csv에는 {len(df_cat_unique)}개의 고유 키워드만 존재합니다. 키워드를 더 추가해주세요."
+        )
+        return
+
+    sampled = df_cat_unique.sample(n=total_needed, replace=False, random_state=random.randint(0, 99999))
 
     st.session_state.problems = [{"keyword": row["키워드"]} for _, row in sampled.iterrows()]
     st.session_state.round_index = 0
@@ -151,6 +160,7 @@ def call_gemini(image_bytes: bytes, category: str) -> str:
     """
     Gemini-2.5-flash 호출하여 그림을 분석하고 한 단어로 정답 추론
     - 응답은 카테고리와 관련된 '한국어 한 단어'만 허용
+    - 네트워크 문제 시 '통신에 실패했습니다' 반환
     """
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
@@ -192,7 +202,6 @@ def call_gemini(image_bytes: bytes, category: str) -> str:
         first = first.strip(" .,!?:;\"'()[]{}")
         return first if first else "모름"
     except Exception:
-        # 네트워크/응답 문제 시 명확히 안내
         st.error("통신에 실패했습니다. 잠시 후 다시 시도해주세요.")
         return "통신에 실패했습니다"
 
@@ -205,7 +214,6 @@ def generate_results_image() -> bytes:
     n = len(correct_answers)
 
     if n == 0:
-        # 아무 문제도 풀지 않은 경우
         img = Image.new("RGB", (800, 300), "white")
         draw = ImageDraw.Draw(img)
         try:
@@ -219,7 +227,7 @@ def generate_results_image() -> bytes:
         return buf.getvalue()
 
     width = 1100
-    thumb_w, thumb_h = 180, 180
+    thumb_w, thumb_h = 140, 140
     margin = 40
     row_h = thumb_h + 40
     height = margin * 2 + 60 + n * row_h
@@ -242,7 +250,6 @@ def generate_results_image() -> bytes:
 
     for i in range(n):
         top = y + i * row_h
-        # 카드 테두리
         draw.rectangle(
             [(margin - 10, top - 10), (width - margin, top + row_h - 20)],
             outline=(209, 213, 219),
@@ -312,7 +319,6 @@ def render_start_page():
     st.markdown("---")
     st.markdown("### 2단계 · 문항 수를 정하세요")
 
-    # 카테고리별 문항 수 설정 (기본 5 / 3~10 사이)
     st.session_state.target_questions = st.slider(
         "문항 수를 선택하세요",
         min_value=3,
@@ -323,17 +329,29 @@ def render_start_page():
     st.caption("패스 기능 때문에 실제 준비되는 문제 수는 '문항 수 + 2' 입니다.")
 
     st.markdown("---")
+    st.markdown("### 3단계 · 게임 안내")
+
+    st.write("- 선택한 카테고리의 제시어가 **랜덤으로 1개씩** 나옵니다.")
+    st.write("- 각 문제당 **제한 시간은 60초**입니다.")
+    st.write("- 그림을 다 그린 뒤 **‘제출’**을 누르면 AI가 한 단어로 정답을 맞춰요.")
+    st.write("- 문제가 너무 어려우면 **‘패스’**를 눌러 다음 문제로 넘어갈 수 있어요.")
+    st.write("  - 패스는 한 게임에 최대 **2번**까지 사용할 수 있습니다.")
+    st.write("  - 패스한 문제는 문항 수에 포함되지 않습니다.")
+    st.write("- 네트워크 문제로 AI 통신이 실패하면, `통신에 실패했습니다` 라는 문구가 표시됩니다.")
+
+    st.markdown("---")
     if st.button("🚀 게임 시작하기", type="primary", use_container_width=True):
         if not st.session_state.category:
             st.warning("먼저 카테고리를 선택해주세요!")
         else:
             prepare_problems(st.session_state.category, st.session_state.target_questions)
-            st.rerun()
+            if st.session_state.problems:  # 키워드 부족 등 오류 없을 때만 진행
+                st.rerun()
 
 
 # ---------- 게임 화면 ----------
 def render_game_page():
-    # 종료 조건: 실제 푼 문제 수가 target_questions에 도달
+    # 종료 조건: 실제 푼 문제 수가 target_questions에 도달했거나, 준비된 문제를 다 소진했을 때
     if (
         st.session_state.answered_count >= st.session_state.target_questions
         or st.session_state.round_index >= len(st.session_state.problems)
@@ -348,7 +366,9 @@ def render_game_page():
 
     # ----- 제출 중이면: 캔버스 고정 + AI 호출 -----
     if st.session_state.submitting:
-        st.markdown(f"### 문제 진행 중...")
+        st.markdown(
+            f"### 문제 {st.session_state.answered_count + 1} / {st.session_state.target_questions}"
+        )
         st.markdown(
             f'<div class="keyword-box">제시어: <span style="color:#e65100;">{current_keyword}</span></div>',
             unsafe_allow_html=True,
@@ -358,10 +378,11 @@ def render_game_page():
         col1, col2 = st.columns([2, 1])
         with col1:
             if st.session_state.last_snapshot_bytes:
+                # 🔍 너무 커지지 않도록 적당한 크기로 조정
                 st.image(
                     st.session_state.last_snapshot_bytes,
                     caption="AI가 보는 마지막 그림",
-                    use_column_width=True,
+                    width=320,
                 )
         with col2:
             st.info("🧠 AI가 생각중입니다...")
@@ -376,7 +397,7 @@ def render_game_page():
         st.session_state.correct_answers.append(current_keyword)
         st.session_state.answered_count += 1
 
-        # 다음 문제로 이동
+        # 다음 문제로 이동 준비
         st.session_state.round_index += 1
         st.session_state.start_time = time.time()
         st.session_state.last_snapshot_bytes = None
@@ -429,7 +450,7 @@ def render_game_page():
     with left:
         st.markdown("#### 1) 팔레트 & 그림 그리기")
 
-        # 자주 쓰는 색상 팔레트 4가지
+        # 자주 쓰는 색상 4가지 팔레트 (상단)
         color_label = st.radio(
             "자주 쓰는 색상",
             options=["⚫ 검정", "🔴 빨강", "🔵 파랑", "🟢 초록"],
@@ -451,8 +472,8 @@ def render_game_page():
                 stroke_width=8,
                 stroke_color=stroke_color,
                 background_color="#FFFFFF",
-                width=500,
-                height=500,
+                width=420,   # 태블릿에서 한눈에 보기 좋은 크기
+                height=420,
                 drawing_mode="freedraw",
                 key=f"canvas_{round_idx}",
             )
@@ -468,18 +489,18 @@ def render_game_page():
                 st.image(
                     st.session_state.last_snapshot_bytes,
                     caption="마지막으로 그린 그림",
-                    use_column_width=True,
+                    width=320,
                 )
             else:
                 st.info("시간 안에 그린 그림이 없어요.")
 
         st.markdown("#### 2) 제출 / 패스")
 
-        # 버튼 한 줄 배치
+        # 제출 / 패스 버튼 한 줄 배치
         bcol1, bcol2, _ = st.columns([1, 1, 1])
 
         # 제출 버튼 활성화 조건
-        # - 시간 안에는 그림이 있어야 제출 가능
+        # - 시간 안엔 그림이 있어야 제출 가능
         # - 시간이 지나면 그림이 없어도 제출 가능(빈 그림 생성)
         if time_over and st.session_state.last_snapshot_bytes is None:
             submit_disabled = False
@@ -490,7 +511,7 @@ def render_game_page():
             if st.button("✅ 제출", use_container_width=True, disabled=submit_disabled):
                 if st.session_state.last_snapshot_bytes is None:
                     # 완전히 빈 그림인 경우 흰 이미지 생성
-                    blank = Image.new("RGB", (500, 500), "white")
+                    blank = Image.new("RGB", (420, 420), "white")
                     buf = io.BytesIO()
                     blank.save(buf, format="PNG")
                     st.session_state.last_snapshot_bytes = buf.getvalue()
@@ -510,13 +531,11 @@ def render_game_page():
                     st.session_state.last_snapshot_bytes = None
                     st.rerun()
 
-    # ----- 오른쪽: 안내 영역 -----
+    # ----- 오른쪽: 간단한 현재 상태 요약 -----
     with right:
-        st.markdown("#### 게임 안내")
-        st.write("- 제한 시간: 각 문제당 **60초**")
-        st.write("- **패스**는 한 게임에 최대 **2번** 사용할 수 있어요.")
-        st.write("- 패스한 문제는 점수에 포함되지 않고, 대신 다른 문제가 나와요.")
-        st.write("- 제출을 누르면 AI가 그림을 보고 한 단어로 맞춰봐요!")
+        st.markdown("#### 현재 진행 상황")
+        st.write(f"- 푼 문제 수: **{st.session_state.answered_count}** / {st.session_state.target_questions}")
+        st.write(f"- 남은 패스: **{st.session_state.max_passes - st.session_state.passes_used}** 회")
 
 
 # ---------- 결과 화면 ----------
@@ -534,7 +553,8 @@ def render_result_page():
             st.markdown('<div class="result-card">', unsafe_allow_html=True)
             st.markdown("**사용자가 그린 그림**")
             if i < len(st.session_state.user_images) and st.session_state.user_images[i] is not None:
-                st.image(st.session_state.user_images[i], use_column_width=True)
+                # 🔍 결과 화면에서도 한 눈에 들어오도록 크기 조정
+                st.image(st.session_state.user_images[i], width=260)
             else:
                 st.write("저장된 그림이 없습니다.")
             st.markdown("</div>", unsafe_allow_html=True)
@@ -600,7 +620,8 @@ def render_result_page():
             st.session_state.category = cat
             st.session_state.target_questions = n_questions
             prepare_problems(cat, n_questions)
-            st.rerun()
+            if st.session_state.problems:
+                st.rerun()
     with col2:
         if st.button("🏠 처음 화면으로 돌아가기", use_container_width=True):
             reset_game()
