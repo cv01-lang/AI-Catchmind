@@ -81,16 +81,23 @@ def init_session_state():
         "category": None,
         "problems": [],              # 준비된 전체 문제 (문항수 + 2, 중복 없는 키워드)
         "round_index": 0,            # 현재 problems 인덱스 (패스 포함 진행)
-        "user_images": [],           # 실제로 푼 문제에 대한 그림 bytes
+        "user_images": [],           # 실제로 푼 문제에 대한 그림 bytes (최종)
         "ai_answers": [],            # 실제로 푼 문제에 대한 AI 답
         "correct_answers": [],       # 실제로 푼 문제에 대한 정답(키워드)
         "start_time": None,
-        "last_snapshot_bytes": None,
-        "submitting": False,         # True: AI 채점 단계
+        "last_snapshot_bytes": None, # 현재 문제에 대해 마지막 스냅샷
+        "submitting": False,         # True: AI 호출 중(생각중 화면)
+        "grading": False,            # True: 방금 푼 문제에 대한 채점 화면
         "target_questions": 5,       # 사용자가 설정한 문항 수
         "max_passes": 2,             # 패스 최대 횟수
         "passes_used": 0,            # 이미 사용한 패스 수
         "answered_count": 0,         # 실제로 푼(제출한) 문제 수
+
+        # 중간 채점 화면용 임시 저장
+        "last_user_image": None,
+        "last_ai_answer": None,
+        "last_correct_answer": None,
+        "last_is_correct": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -99,16 +106,9 @@ def init_session_state():
 
 def reset_game():
     """전체 게임 리셋"""
-    keys = [
-        "page", "category", "problems", "round_index",
-        "user_images", "ai_answers", "correct_answers",
-        "start_time", "last_snapshot_bytes", "submitting",
-        "target_questions", "max_passes", "passes_used",
-        "answered_count",
-    ]
+    keys = list(st.session_state.keys())
     for k in keys:
-        if k in st.session_state:
-            del st.session_state[k]
+        del st.session_state[k]
     init_session_state()
 
 
@@ -141,9 +141,16 @@ def prepare_problems(category: str, n_questions: int):
     st.session_state.start_time = time.time()
     st.session_state.last_snapshot_bytes = None
     st.session_state.submitting = False
+    st.session_state.grading = False
     st.session_state.max_passes = 2
     st.session_state.passes_used = 0
     st.session_state.answered_count = 0
+
+    st.session_state.last_user_image = None
+    st.session_state.last_ai_answer = None
+    st.session_state.last_correct_answer = None
+    st.session_state.last_is_correct = None
+
     st.session_state.target_questions = n_questions
     st.session_state.page = "game"
 
@@ -363,7 +370,14 @@ def render_game_page():
     current_keyword = current_problem["keyword"]
     category = st.session_state.category
 
-    # ----- 제출 중이면: 캔버스 고정 + AI 호출 -----
+    # ----- '처음으로' 버튼 (모든 상태에서 공통 사용) -----
+    top_bar = st.columns([5, 1])
+    with top_bar[1]:
+        if st.button("↩ 처음으로", use_container_width=True):
+            reset_game()
+            st.rerun()
+
+    # ----- 제출 후: AI 생각중 화면 -----
     if st.session_state.submitting:
         st.markdown(
             f"### 문제 {st.session_state.answered_count + 1} / {st.session_state.target_questions}"
@@ -377,7 +391,6 @@ def render_game_page():
         col1, col2 = st.columns([2, 1])
         with col1:
             if st.session_state.last_snapshot_bytes:
-                # 너무 커지지 않도록 적당한 크기로 조정
                 st.image(
                     st.session_state.last_snapshot_bytes,
                     caption="AI가 보는 마지막 그림",
@@ -390,21 +403,100 @@ def render_game_page():
         with st.spinner("AI가 그림을 보고 단어를 떠올리고 있어요..."):
             ai_answer = call_gemini(st.session_state.last_snapshot_bytes, category)
 
-        # 결과 저장 (실제로 푼 문제)
-        st.session_state.user_images.append(st.session_state.last_snapshot_bytes)
-        st.session_state.ai_answers.append(ai_answer)
-        st.session_state.correct_answers.append(current_keyword)
-        st.session_state.answered_count += 1
+        # 방금 푼 문제 정보를 임시 저장 (중간 채점 화면용)
+        st.session_state.last_user_image = st.session_state.last_snapshot_bytes
+        st.session_state.last_ai_answer = ai_answer
+        st.session_state.last_correct_answer = current_keyword
+        st.session_state.last_is_correct = ai_answer == current_keyword
 
-        # 다음 문제로 이동 준비
-        st.session_state.round_index += 1
-        st.session_state.start_time = time.time()
-        st.session_state.last_snapshot_bytes = None
+        # 다음 단계: 채점 화면
         st.session_state.submitting = False
+        st.session_state.grading = True
 
         st.rerun()
+        return
 
-    # ----- 일반 게임 화면 -----
+    # ----- 중간 채점 화면 -----
+    if st.session_state.grading:
+        st.markdown(
+            f"### 문제 {st.session_state.answered_count + 1} / {st.session_state.target_questions}"
+        )
+        st.markdown(
+            f'<div class="keyword-box">제시어: <span style="color:#e65100;">{st.session_state.last_correct_answer}</span></div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(f"카테고리: {category}")
+
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            st.markdown("#### 내가 그린 그림")
+            if st.session_state.last_user_image:
+                st.image(st.session_state.last_user_image, width=260)
+            else:
+                st.write("그림이 저장되지 않았어요.")
+
+        with col2:
+            st.markdown("#### AI 채점 결과")
+
+            ai_ans = st.session_state.last_ai_answer or "응답 없음"
+            correct = st.session_state.last_correct_answer or "정답 없음"
+            is_correct = st.session_state.last_is_correct
+
+            if is_correct:
+                st.markdown(
+                    f"<div style='font-size:1.5rem; color:#15803d; margin-bottom:0.5rem;'>"
+                    f"🎉 정답! AI 응답: <b>{ai_ans}</b>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"<div style='font-size:1.5rem; color:#dc2626; margin-bottom:0.5rem;'>"
+                    f"😅 아쉬워요! AI 응답: <b>{ai_ans}</b>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                f"<div style='font-size:1.4rem; color:#1d4ed8;'>"
+                f"🎯 정답: <b>{correct}</b>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            st.markdown("---")
+            if st.button("➡ 다음 문제로", use_container_width=True):
+                # 최종 결과 리스트에 확정 반영
+                st.session_state.user_images.append(st.session_state.last_user_image)
+                st.session_state.ai_answers.append(ai_ans)
+                st.session_state.correct_answers.append(correct)
+                st.session_state.answered_count += 1
+
+                # 다음 문제로 이동
+                st.session_state.round_index += 1
+                st.session_state.start_time = time.time()
+                st.session_state.last_snapshot_bytes = None
+
+                # 중간 채점 상태 초기화
+                st.session_state.grading = False
+                st.session_state.last_user_image = None
+                st.session_state.last_ai_answer = None
+                st.session_state.last_correct_answer = None
+                st.session_state.last_is_correct = None
+
+                # 다 풀었으면 결과 페이지로
+                if (
+                    st.session_state.answered_count >= st.session_state.target_questions
+                    or st.session_state.round_index >= len(st.session_state.problems)
+                ):
+                    st.session_state.page = "result"
+
+                st.rerun()
+                return
+
+        return
+
+    # ----- 일반 게임 화면 (그리기 + 타이머 + 패스/제출) -----
     if st.session_state.start_time is None:
         st.session_state.start_time = time.time()
 
@@ -412,7 +504,7 @@ def render_game_page():
     remaining = max(0, int(60 - elapsed))
     time_over = remaining <= 0
 
-    top1, top2, top3 = st.columns([2, 2, 1])
+    top1, top2 = st.columns([2, 2])
 
     with top1:
         st.markdown(
@@ -436,204 +528,10 @@ def render_game_page():
             f"- 사용한 패스: **{st.session_state.passes_used} / {st.session_state.max_passes}**"
         )
 
-    with top3:
-        if st.button("↩ 처음으로", use_container_width=True):
-            reset_game()
-            st.rerun()
-
     st.markdown("---")
 
     left, right = st.columns([3, 2])
 
     # ----- 왼쪽: 팔레트 + 캔버스 + 제출/패스 -----
     with left:
-        st.markdown("#### 1) 팔레트 & 그림 그리기")
-
-        # 원래 방식의 색상 팔레트 (radio)
-        color_label = st.radio(
-            "자주 쓰는 색상",
-            options=["⚫ 검정", "🔴 빨강", "🔵 파랑", "🟢 초록"],
-            horizontal=True,
-        )
-
-        if "검정" in color_label:
-            stroke_color = "#000000"
-        elif "빨강" in color_label:
-            stroke_color = "#ef4444"
-        elif "파랑" in color_label:
-            stroke_color = "#3b82f6"
-        else:
-            stroke_color = "#22c55e"
-
-        if not time_over:
-            canvas_result = st_canvas(
-                fill_color="rgba(0, 0, 0, 0)",
-                stroke_width=8,
-                stroke_color=stroke_color,
-                background_color="#FFFFFF",
-                width=600,   # 🔥 여기서 캔버스를 가로로 넓힘
-                height=450,
-                drawing_mode="freedraw",
-                key=f"canvas_{round_idx}",
-            )
-
-            if canvas_result.image_data is not None:
-                img_pil = pil_from_canvas(canvas_result.image_data)
-                buf = io.BytesIO()
-                img_pil.save(buf, format="PNG")
-                st.session_state.last_snapshot_bytes = buf.getvalue()
-        else:
-            st.warning("⏰ 제한 시간이 끝났어요! 더 이상 그림을 그릴 수 없어요.")
-            if st.session_state.last_snapshot_bytes:
-                st.image(
-                    st.session_state.last_snapshot_bytes,
-                    caption="마지막으로 그린 그림",
-                    width=320,
-                )
-            else:
-                st.info("시간 안에 그린 그림이 없어요.")
-
-        st.markdown("#### 2) 제출 / 패스")
-
-        # 제출 / 패스 버튼 한 줄 배치
-        bcol1, bcol2, _ = st.columns([1, 1, 1])
-
-        # 제출 버튼 활성화 조건
-        # - 시간 안엔 그림이 있어야 제출 가능
-        # - 시간이 지나면 그림이 없어도 제출 가능(빈 그림 생성)
-        if time_over and st.session_state.last_snapshot_bytes is None:
-            submit_disabled = False
-        else:
-            submit_disabled = st.session_state.last_snapshot_bytes is None
-
-        with bcol1:
-            if st.button("✅ 제출", use_container_width=True, disabled=submit_disabled):
-                if st.session_state.last_snapshot_bytes is None:
-                    # 완전히 빈 그림인 경우 흰 이미지 생성 (캔버스와 동일 크기)
-                    blank = Image.new("RGB", (600, 450), "white")
-                    buf = io.BytesIO()
-                    blank.save(buf, format="PNG")
-                    st.session_state.last_snapshot_bytes = buf.getvalue()
-
-                st.session_state.submitting = True
-                st.rerun()
-
-        with bcol2:
-            pass_disabled = st.session_state.passes_used >= st.session_state.max_passes
-            if st.button("⏭ 패스", use_container_width=True, disabled=pass_disabled):
-                if st.session_state.passes_used >= st.session_state.max_passes:
-                    st.warning("패스는 한 게임에 최대 2번까지만 사용할 수 있어요.")
-                else:
-                    st.session_state.passes_used += 1
-                    st.session_state.round_index += 1
-                    st.session_state.start_time = time.time()
-                    st.session_state.last_snapshot_bytes = None
-                    st.rerun()
-
-    # ----- 오른쪽: 간단한 현재 상태 요약 -----
-    with right:
-        st.markdown("#### 현재 진행 상황")
-        st.write(f"- 푼 문제 수: **{st.session_state.answered_count}** / {st.session_state.target_questions}")
-        st.write(f"- 남은 패스: **{st.session_state.max_passes - st.session_state.passes_used}** 회")
-
-
-# ---------- 결과 화면 ----------
-def render_result_page():
-    st.success("🎉 모든 문제를 다 풀었어요! 결과를 확인해볼까요?")
-
-    n_rounds = len(st.session_state.correct_answers)
-
-    for i in range(n_rounds):
-        st.markdown(f"### 🔎 문제 {i + 1}")
-
-        col1, col2 = st.columns([2, 3])
-
-        with col1:
-            st.markdown('<div class="result-card">', unsafe_allow_html=True)
-            st.markdown("**사용자가 그린 그림**")
-            if i < len(st.session_state.user_images) and st.session_state.user_images[i] is not None:
-                # 결과 화면에서도 한 눈에 들어오도록 크기 조정
-                st.image(st.session_state.user_images[i], width=260)
-            else:
-                st.write("저장된 그림이 없습니다.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with col2:
-            st.markdown('<div class="result-card">', unsafe_allow_html=True)
-            ai_ans = st.session_state.ai_answers[i] if i < len(st.session_state.ai_answers) else "응답 없음"
-            correct = (
-                st.session_state.correct_answers[i]
-                if i < len(st.session_state.correct_answers)
-                else "정답 없음"
-            )
-
-            is_correct = ai_ans == correct
-            if is_correct:
-                st.markdown(
-                    f"<div style='font-size:1.4rem; color:#15803d; margin-bottom:0.5rem;'>"
-                    f"✅ <b>AI 응답:</b> {ai_ans}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                st.markdown(
-                    f"<div style='font-size:1.4rem; color:#1d4ed8;'>"
-                    f"🎯 <b>정답:</b> {correct}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    f"<div style='font-size:1.4rem; color:#dc2626; margin-bottom:0.5rem;'>"
-                    f"❌ <b>AI 응답:</b> {ai_ans}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                st.markdown(
-                    f"<div style='font-size:1.4rem; color:#1d4ed8;'>"
-                    f"🎯 <b>정답:</b> {correct}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown("---")
-
-    st.markdown("### 📥 결과 저장")
-
-    png_bytes = generate_results_image()
-    st.download_button(
-        label="🖼 PNG로 다운",
-        data=png_bytes,
-        file_name="catchmind_results.png",
-        mime="image/png",
-        use_container_width=True,
-    )
-
-    st.markdown("### 다시 해볼까요?")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🔁 같은 설정으로 다시 하기", use_container_width=True):
-            cat = st.session_state.category
-            n_questions = st.session_state.target_questions
-            reset_game()
-            st.session_state.category = cat
-            st.session_state.target_questions = n_questions
-            prepare_problems(cat, n_questions)
-            if st.session_state.problems:
-                st.rerun()
-    with col2:
-        if st.button("🏠 처음 화면으로 돌아가기", use_container_width=True):
-            reset_game()
-            st.rerun()
-
-
-# ---------- 실행 ----------
-if page == "start":
-    render_start_page()
-elif page == "game":
-    render_game_page()
-elif page == "result":
-    render_result_page()
-else:
-    reset_game()
-    render_start_page()
+        st.markdown(
