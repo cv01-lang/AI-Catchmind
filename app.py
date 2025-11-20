@@ -91,6 +91,7 @@ def init_session_state():
         "max_passes": 2,             # 패스 최대 횟수
         "passes_used": 0,            # 이미 사용한 패스 수
         "answered_count": 0,         # 실제로 푼(제출한) 문제 수
+        "selected_color": "#000000", # 현재 선택된 팔레트 색상
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -104,7 +105,7 @@ def reset_game():
         "user_images", "ai_answers", "correct_answers",
         "start_time", "last_snapshot_bytes", "submitting",
         "target_questions", "max_passes", "passes_used",
-        "answered_count",
+        "answered_count", "selected_color",
     ]
     for k in keys:
         if k in st.session_state:
@@ -116,7 +117,6 @@ def prepare_problems(category: str, n_questions: int):
     """
     선택한 카테고리에서 '문항수 + 2' 개의 키워드를 준비
     - 한 게임 동안 같은 키워드는 다시 나오지 않도록 '키워드' 기준으로 중복 제거 후 샘플링
-    - 예: 고양이-거북이(패스)-고양이(패스)-고양이 같은 문제 방지
     """
     df = load_keywords()
     df_cat = df[df["카테고리"] == category]
@@ -378,7 +378,7 @@ def render_game_page():
         col1, col2 = st.columns([2, 1])
         with col1:
             if st.session_state.last_snapshot_bytes:
-                # 🔍 너무 커지지 않도록 적당한 크기로 조정
+                # 너무 커지지 않도록 적당한 크기로 조정
                 st.image(
                     st.session_state.last_snapshot_bytes,
                     caption="AI가 보는 마지막 그림",
@@ -450,21 +450,39 @@ def render_game_page():
     with left:
         st.markdown("#### 1) 팔레트 & 그림 그리기")
 
-        # 자주 쓰는 색상 4가지 팔레트 (상단)
-        color_label = st.radio(
-            "자주 쓰는 색상",
-            options=["⚫ 검정", "🔴 빨강", "🔵 파랑", "🟢 초록"],
-            horizontal=True,
-        )
+        # === 큰 가로 팔레트 버튼들 ===
+        palette_cols = st.columns(4)
+        colors = [
+            ("#000000", "검정"),
+            ("#ef4444", "빨강"),
+            ("#3b82f6", "파랑"),
+            ("#22c55e", "초록"),
+        ]
 
-        if "검정" in color_label:
-            stroke_color = "#000000"
-        elif "빨강" in color_label:
-            stroke_color = "#ef4444"
-        elif "파랑" in color_label:
-            stroke_color = "#3b82f6"
-        else:
-            stroke_color = "#22c55e"
+        for i, (hex_color, name) in enumerate(colors):
+            with palette_cols[i]:
+                # 버튼 (클릭 영역)
+                if st.button(name, key=f"palette_btn_{i}", use_container_width=True):
+                    st.session_state.selected_color = hex_color
+
+                # 큰 컬러 박스 (시각적 표시)
+                is_selected = st.session_state.selected_color == hex_color
+                border_color = "#fbbf24" if is_selected else "#e5e7eb"
+                st.markdown(
+                    f"""
+                    <div style="
+                        width: 100%;
+                        height: 70px;
+                        margin-top: 4px;
+                        background-color: {hex_color};
+                        border-radius: 12px;
+                        border: 4px solid {border_color};
+                    "></div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        stroke_color = st.session_state.selected_color
 
         if not time_over:
             canvas_result = st_canvas(
@@ -553,7 +571,7 @@ def render_result_page():
             st.markdown('<div class="result-card">', unsafe_allow_html=True)
             st.markdown("**사용자가 그린 그림**")
             if i < len(st.session_state.user_images) and st.session_state.user_images[i] is not None:
-                # 🔍 결과 화면에서도 한 눈에 들어오도록 크기 조정
+                # 결과 화면에서도 한 눈에 들어오도록 크기 조정
                 st.image(st.session_state.user_images[i], width=260)
             else:
                 st.write("저장된 그림이 없습니다.")
